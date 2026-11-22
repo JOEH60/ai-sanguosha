@@ -37,6 +37,9 @@ let state = null;
 let bet = null;               // { choice: 'lord'|'rebel'|'traitor', amount }
 let clients = [];             // SSE 订阅
 let running = false;
+let humanSeat = null;         // 非空 = 有真人上桌（关闭上帝视角）
+let pendingHuman = null;      // { seat, kind, card, finish }
+const HUMAN_TIMEOUT = cfg.humanTimeout || 120000;
 
 function log(type, text, extra) {
   const ev = { t: Date.now(), type, text, ...extra };
@@ -45,13 +48,24 @@ function log(type, text, extra) {
   return ev;
 }
 function snapshot() {
+  const playerMode = humanSeat != null;
   return {
     round: state.round, phase: state.phase, winner: state.winner, bet,
-    players: state.players.map(p => ({
-      seat: p.seat, general: p.general, name: p.name, role: p.role,
-      hp: p.hp, maxHp: p.maxHp, alive: p.alive,
-      hand: p.hand.slice(), handCount: p.hand.length, thinking: p.thinking || ''
-    }))
+    deck: state.deck.length, discard: state.discard.length,
+    humanSeat,
+    recent: state.events.slice(-30).map(e => ({ t: e.t, type: e.type, text: e.text })),
+    players: state.players.map(p => {
+      const mine = playerMode && p.seat === humanSeat;
+      const hidden = playerMode && !mine;
+      return {
+        seat: p.seat, general: p.general, name: p.name,
+        role: hidden ? (p.seat === 1 ? 'lord' : 'unknown') : p.role,
+        hp: p.hp, maxHp: p.maxHp, alive: p.alive,
+        hand: hidden ? [] : p.hand.slice(), handCount: p.hand.length,
+        thinking: mine ? '' : (p.thinking || ''),
+        you: mine
+      };
+    })
   };
 }
 function broadcast(obj) {
@@ -123,8 +137,38 @@ function respondPrompt(p, situation) {
   ].join('\n');
 }
 
+// ---------- 真人决策等待 ----------
+function awaitHuman(req) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (pendingHuman && pendingHuman.seat === req.seat) pendingHuman = null;
+      broadcast({ kind: 'human-clear', seat: req.seat });
+      resolve(v);
+    };
+    const timer = setTimeout(() => {
+      broadcast({ kind: 'human-timeout', seat: req.seat });
+      log('sys', `${req.seat}号 你超时未操作，自动跳过`);
+      finish('PASS');
+    }, HUMAN_TIMEOUT);
+    pendingHuman = { seat: req.seat, kind: req.kind, card: req.card || null, finish };
+    broadcast({ kind: 'human-turn', req: { seat: req.seat, kind: req.kind, card: req.card || null }, snapshot: snapshot() });
+  });
+}
+
 // ---------- 决策：主动出牌 ----------
 async function decidePlay(p) {
+  if (p.seat === humanSeat) {
+    p.thinking = '等你出牌…';
+    broadcast({ kind: 'snapshot', snapshot: snapshot() });
+    const dir = await awaitHuman({ seat: p.seat, kind: 'play' });
+    p.thinking = '';
+    broadcast({ kind: 'snapshot', snapshot: snapshot() });
+    return dir;
+  }
   p.thinking = '思考中…';
   broadcast({ kind: 'snapshot', snapshot: snapshot() });
   let raw = '';
@@ -145,6 +189,12 @@ async function decidePlay(p) {
 }
 // ---------- 决策：响应（闪/杀/桃） ----------
 async function decideRespond(p, kind) {
+  if (p.seat === humanSeat) {
+    const need = { sha: '闪', duel: '杀', tao: '桃' }[kind] || null;
+    if (need && !p.hand.includes(need)) return 'PASS';
+    const ans = await awaitHuman({ seat: p.seat, kind: 'respond', card: need });
+    return ans === '出' ? '出' : 'PASS';
+  }
   const situation = kind === 'sha' ? `你正被「杀」指定为目标，有「闪」可以抵消，否则体力-1。`
     : kind === 'duel' ? `你正身处「决斗」，需要打出「杀」，否则体力-1。`
     : `你（或濒死的队友）体力归零，有「桃」可以救。`;
@@ -338,9 +388,11 @@ async function gameLoop() {
   const seats = [roles[lordIdx], ...roles.filter((_, i) => i !== lordIdx)];
   state = { players: [], deck: buildDeck(), discard: [], round: 0, phase: '开局', winner: null, events: [] };
   const playersCfg = shuffle(cfg.players.slice());
+  let cfgIdx = 0;
   for (let i = 0; i < 5; i++) {
     const role = seats[i];
-    const pc = playersCfg[i];
+    const isHuman = humanSeat === i + 1;
+    const pc = isHuman ? { name: '你（玩家）', url: '', key: '', model: '' } : playersCfg[cfgIdx++];
     state.players.push({
       seat: i + 1, general: GENERALS[i], name: pc.name, role,
       url: pc.url, key: pc.key, model: pc.model,
@@ -350,7 +402,12 @@ async function gameLoop() {
   }
   for (const p of state.players) drawCards(p, 4);
   log('start', `开局！${state.players.map(p => `${p.seat}号${p.general}`).join('、')}。1号是主公（公开），其余身份暗置。`);
-  log('roles', `【上帝视角】身份分布：${state.players.map(p => `${p.seat}号=${ROLE_NAME[p.role]}`).join('，')}`);
+  if (humanSeat == null) {
+    log('roles', `【上帝视角】身份分布：${state.players.map(p => `${p.seat}号=${ROLE_NAME[p.role]}`).join('，')}`);
+  } else {
+    const me = state.players.find(p => p.seat === humanSeat);
+    log('roles', `你坐在 ${me.seat}号 ${me.general}，身份是【${ROLE_NAME[me.role]}】。本次对局上帝视角已关闭。`);
+  }
 
   let cursor = 0;
   while (!state.winner && state.round <= MAX_ROUNDS) {
@@ -384,6 +441,7 @@ function loadBoard() {
 function updateBoard(winner) {
   const b = loadBoard();
   for (const p of state.players) {
+    if (humanSeat === p.seat) continue;   // 真人不计入模型战绩
     const k = p.name;
     b.models[k] = b.models[k] || { win: 0, games: 0, roles: {} };
     b.models[k].games++;
@@ -411,20 +469,43 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(fs.readFileSync(path.join(ROOT, 'index.html')));
   } else if (u.pathname === '/api/state') {
-    json(res, 200, { snapshot: state ? snapshot() : null, running });
+    json(res, 200, {
+      snapshot: state ? snapshot() : null, running,
+      pending: pendingHuman ? { seat: pendingHuman.seat, kind: pendingHuman.kind, card: pendingHuman.card } : null
+    });
   } else if (u.pathname === '/api/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.write('data: ' + JSON.stringify({ kind: 'hello', snapshot: state ? snapshot() : null }) + '\n\n');
+    res.write('data: ' + JSON.stringify({ kind: 'hello', snapshot: state ? snapshot() : null, pending: pendingHuman ? { seat: pendingHuman.seat, kind: pendingHuman.kind, card: pendingHuman.card } : null }) + '\n\n');
     clients.push(res);
     req.on('close', () => { clients = clients.filter(c => c !== res); });
+  } else if (req.method === 'POST' && u.pathname === '/api/human') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      let action = 'PASS';
+      try { const j = body ? JSON.parse(body) : {}; if (typeof j.action === 'string') action = j.action; } catch (e) {}
+      if (!pendingHuman) return json(res, 409, { error: '当前没有等待你的操作' });
+      const fin = pendingHuman.finish;
+      fin(action);
+      json(res, 200, { ok: true, action });
+    });
   } else if (req.method === 'POST' && u.pathname === '/api/start') {
     if (running) return json(res, 400, { error: '对局进行中' });
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
-      try { const j = body ? JSON.parse(body) : {}; if (j.choice && j.amount) bet = { choice: j.choice, amount: j.amount, result: null, payout: 0 }; } catch (e) {}
+      let j = {};
+      try { j = body ? JSON.parse(body) : {}; } catch (e) {}
+      if (j.choice && j.amount) bet = { choice: j.choice, amount: j.amount, result: null, payout: 0 };
+      // 真人上桌 → 关闭上帝视角
+      humanSeat = null;
+      pendingHuman = null;
+      if (j.join) {
+        const want = parseInt(j.seat, 10);
+        humanSeat = (want >= 1 && want <= 5) ? want : 1 + Math.floor(Math.random() * 5);
+      }
       running = true;
-      json(res, 200, { ok: true });
+      json(res, 200, { ok: true, humanSeat });
       gameLoop().then(() => { if (bet && state && state.winner) settleBet(state.winner); }).catch(e => {
         console.error(e);
         if (state) log('sys', `💥 引擎异常：${e.message}`);
