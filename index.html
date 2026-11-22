@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AI 三国杀 · 上帝视角</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #12141a; color: #e8e2d5; font-family: "Microsoft YaHei", sans-serif; min-height: 100vh; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 22px; border-bottom: 1px solid #2a2d38; }
+  header h1 { font-size: 20px; color: #f6c344; white-space: nowrap; letter-spacing: 2px; }
+  header .status { font-size: 13px; color: #8b90a0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .round { color: #f6c344; font-weight: bold; }
+  main { display: grid; grid-template-columns: 1fr 420px; gap: 14px; padding: 14px 22px; }
+  /* 座位 */
+  #seats { display: flex; flex-direction: column; gap: 10px; }
+  .seat { display: grid; grid-template-columns: 150px 1fr 210px; gap: 10px; background: #1b1e28; border: 1px solid #2a2d38; border-radius: 10px; padding: 10px 14px; align-items: center; }
+  .seat.lordseat { border-color: #f6c344; }
+  .seat.dead { opacity: .45; filter: grayscale(1); }
+  .seat .gname { font-size: 18px; font-weight: bold; color: #f6c344; }
+  .seat .mname { font-size: 12px; color: #8b90a0; margin-top: 2px; }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 9px; margin-left: 8px; color: #12141a; font-weight: bold; }
+  .hp { margin-top: 6px; font-size: 15px; letter-spacing: 2px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 6px; }
+  .card { background: #2b2f3d; border: 1px solid #3a3f52; border-radius: 6px; padding: 4px 9px; font-size: 14px; color: #e8e2d5; }
+  .card.s { color: #e05555; border-color: #6b3030; }
+  .card.t { color: #6fbf5a; border-color: #2e5230; }
+  .card.p { color: #ff9ecb; border-color: #5c3350; }
+  .card.d { color: #f6c344; }
+  .acting { box-shadow: 0 0 0 2px #f6c344; }
+  .think { font-size: 12px; color: #58d0c0; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  /* 战报 */
+  #feed { background: #1b1e28; border: 1px solid #2a2d38; border-radius: 10px; padding: 12px; height: calc(100vh - 140px); overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+  .msg { font-size: 14px; line-height: 1.5; padding: 6px 10px; border-radius: 8px; background: #22252f; }
+  .msg.turn { color: #f6c344; background: transparent; text-align: center; font-weight: bold; }
+  .msg.sha { color: #e8b0a0; }
+  .msg.dodge { color: #8fd0ff; }
+  .msg.hit { color: #ff7a6e; }
+  .msg.death { color: #ff5252; font-weight: bold; background: #2b1420; }
+  .msg.tao { color: #ff9ecb; }
+  .msg.win { color: #ffe084; font-size: 17px; font-weight: bold; background: #2e2712; text-align: center; }
+  .msg.sys { color: #7d8290; font-size: 12px; }
+  .msg.bad { color: #d0a060; font-size: 12px; }
+  .msg.roles { color: #58d0c0; font-size: 12px; background: #16231f; }
+  .msg.bet { color: #ffe084; background: #24200e; }
+  /* 押注 */
+  #overlay { position: fixed; inset: 0; background: rgba(8,9,13,.82); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #overlay .panel { background: #1b1e28; border: 1px solid #3a3f52; border-radius: 14px; padding: 30px 40px; text-align: center; width: 460px; }
+  #overlay h2 { color: #f6c344; margin-bottom: 6px; }
+  #overlay p { color: #8b90a0; font-size: 13px; margin-bottom: 18px; }
+  .choice-row { display: flex; gap: 10px; margin-bottom: 18px; }
+  .choice { flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #3a3f52; background: #22252f; cursor: pointer; font-size: 15px; color: #e8e2d5; }
+  .choice small { display: block; font-size: 11px; color: #8b90a0; margin-top: 4px; }
+  .choice.sel { border-color: #f6c344; background: #2e2712; color: #f6c344; }
+  #amount { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #3a3f52; background: #12141a; color: #e8e2d5; font-size: 15px; margin-bottom: 14px; text-align: center; }
+  #goBtn { width: 100%; padding: 12px; border-radius: 10px; border: none; background: #f6c344; color: #12141a; font-size: 16px; font-weight: bold; cursor: pointer; }
+  #goBtn:disabled { opacity: .4; }
+  #again { margin-top: 14px; display: none; width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #f6c344; background: transparent; color: #f6c344; font-size: 15px; cursor: pointer; }
+  /* 排行榜 */
+  #board { grid-column: 1 / 3; background: #1b1e28; border: 1px solid #2a2d38; border-radius: 10px; padding: 12px 16px; font-size: 13px; color: #8b90a0; }
+  #board b { color: #e8e2d5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚔ AI 三国杀 · 上帝视角</h1>
+  <div class="status" id="status">等待开局…</div>
+</header>
+<main>
+  <div>
+    <div id="seats"></div>
+    <div id="board"></div>
+  </div>
+  <div id="feed"></div>
+</main>
+
+<div id="overlay">
+  <div class="panel">
+    <h2>押一注再开局</h2>
+    <p>上帝视角也猜不准的。押中赔率：主公方 ×2.5 ｜ 反贼 ×2.0 ｜ 内奸 ×8.0</p>
+    <div class="choice-row">
+      <div class="choice sel" data-c="lord">主公方<small>主公或忠臣活到最后</small></div>
+      <div class="choice" data-c="rebel">反贼<small>杀死主公即胜</small></div>
+      <div class="choice" data-c="traitor">内奸<small>一穿四独赢</small></div>
+    </div>
+    <input id="amount" type="number" value="10" min="1" max="100">
+    <button id="goBtn">开局！</button>
+    <button id="again">再来一局</button>
+  </div>
+</div>
+
+<script>
+let snapshot = null, selChoice = 'lord', lastWinner = null;
+const feed = document.getElementById('feed');
+const seatsEl = document.getElementById('seats');
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function render() {
+  if (!snapshot) return;
+  document.getElementById('status').innerHTML =
+    `第 <span class="round">${snapshot.round}</span> 轮 · ${esc(snapshot.phase)}`;
+  seatsEl.innerHTML = snapshot.players.map(p => {
+    const hpStr = '❤'.repeat(Math.max(p.hp, 0)) + '·'.repeat(Math.max(p.maxHp - Math.max(p.hp, 0), 0));
+    const badge = `<span class="badge" style="background:${roleColor(p.role)}">${roleName(p.role)}</span>`;
+    const cards = p.hand.map(c => `<span class="card ${cardCls(c)}">${c}</span>`).join('');
+    const think = p.thinking ? `<div class="think">思考中…</div>` : '';
+    return `<div class="seat ${p.seat === 1 ? 'lordseat' : ''} ${p.alive ? '' : 'dead'}" id="seat${p.seat}">
+      <div><div class="gname">${p.seat}号 ${esc(p.general)}${badge}</div>
+      <div class="mname">${esc(p.name)}</div>
+      <div class="hp">${hpStr}</div></div>
+      <div class="cards">${cards || '<span style="color:#555;font-size:12px">（无手牌）</span>'}</div>
+      <div>${think}</div>
+    </div>`;
+  }).join('');
+}
+function roleName(r) { return { lord: '主公', loyal: '忠臣', rebel: '反贼', traitor: '内奸', draw: '平局' }[r] || r; }
+function roleColor(r) { return { lord: '#f6c344', loyal: '#6fbf5a', rebel: '#e05555', traitor: '#9b7fd4' }[r] || '#888'; }
+function cardCls(c) { return { '杀': 's', '闪': 'd', '桃': 'p', '决斗': 'd', '无中生有': 't', '过河拆桥': 't', '顺手牵羊': 't' }[c] || ''; }
+
+function addMsg(ev) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + ev.type;
+  d.innerHTML = esc(ev.text);
+  feed.appendChild(d);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+async function loadBoard() {
+  try {
+    const b = await (await fetch('/api/board')).json();
+    const rows = Object.entries(b.models || {}).sort((a, x) => x[1].win - a[1].win)
+      .map(([k, v]) => `${esc(k)} <b>${v.win}胜/${v.games}场</b>`).join('　|　');
+    const bets = b.bets || {};
+    document.getElementById('board').innerHTML =
+      `🏆 模型战绩：${rows || '暂无'}　　💰 你的押注：<b>${bets.win || 0}胜 ${bets.lose || 0}负</b>，累计赢 <b>¥${(bets.earned || 0).toFixed(0)}</b>`;
+  } catch (e) {}
+}
+
+const es = new EventSource('/api/events');
+es.onmessage = (m) => {
+  const d = JSON.parse(m.data);
+  if (d.kind === 'hello' && d.snapshot) snapshot = d.snapshot;
+  else if (d.kind === 'event') { addMsg(d.event); snapshot = d.snapshot; }
+  else if (d.kind === 'snapshot') snapshot = d.snapshot;
+  render();
+  if (snapshot && snapshot.winner && !lastWinner) {
+    lastWinner = snapshot.winner;
+    document.getElementById('again').style.display = 'block';
+    document.getElementById('goBtn').style.display = 'none';
+    loadBoard();
+  }
+};
+
+document.querySelectorAll('.choice').forEach(el => el.onclick = () => {
+  document.querySelectorAll('.choice').forEach(x => x.classList.remove('sel'));
+  el.classList.add('sel'); selChoice = el.dataset.c;
+});
+document.getElementById('goBtn').onclick = async () => {
+  const amount = parseInt(document.getElementById('amount').value, 10) || 10;
+  document.getElementById('goBtn').disabled = true;
+  feed.innerHTML = '';
+  lastWinner = null;
+  await fetch('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice: selChoice, amount }) });
+};
+document.getElementById('again').onclick = () => {
+  document.getElementById('overlay').style.display = 'flex';
+  document.getElementById('again').style.display = 'none';
+  document.getElementById('goBtn').style.display = 'block';
+  document.getElementById('goBtn').disabled = false;
+};
+loadBoard();
+</script>
+</body>
+</html>

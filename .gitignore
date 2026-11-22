@@ -1,0 +1,11 @@
+# 你的 API 密钥与座位阵容（绝不入库）
+config.json
+
+# 运行产物
+board.json
+games/
+*.log
+
+node_modules/
+.DS_Store
+Thumbs.db

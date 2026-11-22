@@ -1,0 +1,11 @@
+{
+  "port": 8901,
+  "generals": ["关羽", "张飞", "诸葛亮", "赵云", "吕布"],
+  "players": [
+    { "name": "玩家A", "url": "https://open.bigmodel.cn/api/paas/v4/chat/completions", "key": "你的APIKey", "model": "glm-4.7" },
+    { "name": "玩家B", "url": "http://localhost:11434/v1/chat/completions", "key": "ollama", "model": "qwen2.5:7b" },
+    { "name": "玩家C", "url": "https://api.openai.com/v1/chat/completions", "key": "sk-xxx", "model": "gpt-4o-mini" },
+    { "name": "玩家D", "url": "http://localhost:11434/v1/chat/completions", "key": "ollama", "model": "deepseek-r1:8b" },
+    { "name": "玩家E", "url": "https://open.bigmodel.cn/api/paas/v4/chat/completions", "key": "你的APIKey", "model": "glm-4.6" }
+  ]
+}
